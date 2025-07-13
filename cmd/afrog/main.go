@@ -87,6 +87,12 @@ func main() {
 					// 兼容性进度条 @edit 2025/03/29
 					fmt.Printf("\r[%s] %d%% (%d/%d), %s", progress.GetProgressBar(pgress, 0), pgress, options.CurrentCount, options.Count, strings.Split(time.Since(starttime).String(), ".")[0]+"s")
 					// fmt.Printf("\r[%s] %d%% (%d/%d), %s", progress.CreateProgressBar(pgress, 50, '▉', '░'), pgress, options.CurrentCount, options.Count, strings.Split(time.Since(starttime).String(), ".")[0]+"s")
+					// 新增：向stderr输出进度信息（用于程序化调用）
+					fmt.Fprintf(os.Stderr, "\nPROGRESS:%d%%|(%d/%d)|elapsed time:%s\n",
+						pgress,
+						options.CurrentCount,
+						options.Count,
+						strings.Split(time.Since(starttime).String(), ".")[0]+"s")
 				}
 			}()
 		}
