@@ -1,24 +1,22 @@
 package runner
 
 import (
-	"fmt"
-	"net/http"
-	"strings"
-	"sync"
-	"time"
+    "fmt"
+    "net/http"
+    "regexp"
+    "strings"
+    "sync"
+    "time"
 
-	"github.com/zan8in/afrog/v3/pkg/protocols/gox"
-	"github.com/zan8in/afrog/v3/pkg/protocols/http/retryhttpclient"
-	"github.com/zan8in/afrog/v3/pkg/protocols/netxclient"
-	"github.com/zan8in/afrog/v3/pkg/protocols/raw"
-	"github.com/zan8in/afrog/v3/pkg/result"
+    "github.com/zan8in/afrog/v3/pkg/config"
+    "github.com/zan8in/afrog/v3/pkg/protocols/http/retryhttpclient"
+    "github.com/zan8in/afrog/v3/pkg/result"
 
-	"github.com/google/cel-go/checker/decls"
-	"github.com/zan8in/afrog/v3/pkg/config"
-	"github.com/zan8in/afrog/v3/pkg/poc"
-	"github.com/zan8in/afrog/v3/pkg/proto"
-	"github.com/zan8in/afrog/v3/pkg/utils"
-	"gopkg.in/yaml.v2"
+    "github.com/google/cel-go/checker/decls"
+    "github.com/zan8in/afrog/v3/pkg/poc"
+    "github.com/zan8in/afrog/v3/pkg/proto"
+    "github.com/zan8in/afrog/v3/pkg/utils"
+    "gopkg.in/yaml.v2"
 )
 
 var MMutex = &sync.Mutex{}
@@ -88,55 +86,21 @@ func (c *Checker) Check(target string, pocItem *poc.Poc) (err error) {
 			time.Sleep(time.Duration(rule.BeforeSleep) * time.Second)
 		}
 
-		isMatch := false
-		reqType := strings.ToLower(rule.Request.Type)
+		// 预处理：让 rules 的 path/headers/body/host/raw/data 支持 {{...}} CEL 运算
+		c.preRenderRuleRequest(&rule.Request)
 
-		if len(reqType) > 0 && reqType != string(poc.HTTP_Type) && reqType != string(poc.HTTPS_Type) {
-			if reqType == poc.TCP_Type || reqType == poc.UDP_Type {
-				if nc, err := netxclient.NewNetClient(rule.Request.Host, netxclient.Config{
-					Network:     rule.Request.Type,
-					ReadTimeout: time.Duration(rule.Request.ReadTimeout),
-					ReadSize:    rule.Request.ReadSize,
-					MaxRetries:  1,
-				}); err == nil {
-					nc.Request(rule.Request.Data, rule.Request.DataType, c.VariableMap)
-					nc.Close()
-				}
-			}
-			if reqType == poc.GO_Type {
-				err = gox.Request(target, rule.Request.Data, c.VariableMap)
-			}
+        isMatch := false
+        reqType := strings.ToLower(rule.Request.Type)
 
-		} else {
-
-			if len(rule.Request.Raw) > 0 {
-				rt := raw.RawHttp{
-					RawhttpClient:   raw.GetRawHTTP(c.Options.Proxy, int(c.Options.Timeout)),
-					MaxRespBodySize: c.Options.MaxRespBodySize,
-					// 新增最大响应体限制
-					// @editor 2024/02/06
-				}
-				err = rt.RawHttpRequest(rule.Request.Raw, target, c.Options.Header, c.VariableMap)
-
-			} else {
-				// 自定义type类型：http、https
-				// @editor 2024/08/07
-				targetTmp := target
-				if len(reqType) > 0 {
-					if reqType == poc.HTTPS_Type {
-						if strings.HasPrefix(targetTmp, "http://") {
-							targetTmp = strings.Replace(targetTmp, "http://", "https://", 1)
-						}
-					}
-					if reqType == poc.HTTP_Type {
-						if strings.HasPrefix(targetTmp, "https://") {
-							targetTmp = strings.Replace(targetTmp, "https://", "http://", 1)
-						}
-					}
-				}
-				err = retryhttpclient.Request(targetTmp, c.Options.Header, rule, c.VariableMap)
-			}
-		}
+        if len(rule.Request.Raw) > 0 {
+            err = RawHTTPExecutor{}.Execute(target, rule, c.Options, c.VariableMap)
+        } else {
+            exec, ok := executors[reqType]
+            if !ok {
+                exec = HTTPExecutor{}
+            }
+            err = exec.Execute(target, rule, c.Options, c.VariableMap)
+        }
 
 		if err == nil {
 			if len(rule.Expressions) > 0 {
@@ -276,47 +240,61 @@ func (c *Checker) checkURL(target string) (string, error) {
 func (c *Checker) UpdateVariableMap(args yaml.MapSlice) {
 	for _, item := range args {
 		key := item.Key.(string)
-		value := item.Value.(string)
 
-		// if value == "newReverse()" {
-		// 	c.VariableMap[key] = c.newRerverse()
-		// 	c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.Reverse"))
-		// 	continue
-		// }
+		// 新增：根据 YAML 值的实际类型分支处理
+		switch v := item.Value.(type) {
+		case string:
+			// oob() 函数特殊处理
+			if v == "oob()" {
+				c.VariableMap[key] = c.oob()
+				c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.OOB"))
+				continue
+			}
 
-		if value == "oob()" {
-			c.VariableMap[key] = c.oob()
-			c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.OOB"))
-			continue
-		}
+			// 原有字符串路径：走 CEL 求值
+			out, err := c.CustomLib.RunEval(v, c.VariableMap)
+			if err != nil {
+				// fixed set string failed bug
+				c.VariableMap[key] = fmt.Sprintf("%v", v)
+				c.CustomLib.UpdateCompileOption(key, decls.String)
+				continue
+			}
+			switch value := out.Value().(type) {
+			case *proto.UrlType:
+				c.VariableMap[key] = utils.UrlTypeToString(value)
+				c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.UrlType"))
+			case int64:
+				c.VariableMap[key] = int(value)
+				c.CustomLib.UpdateCompileOption(key, decls.Int)
+			case map[string]string:
+				c.VariableMap[key] = value
+				c.CustomLib.UpdateCompileOption(key, StrStrMapType)
+			default:
+				c.VariableMap[key] = fmt.Sprintf("%v", out)
+				c.CustomLib.UpdateCompileOption(key, decls.String)
+			}
 
-		// if value == "newJNDI()" {
-		// 	c.VariableMap[key] = c.newJNDI()
-		// 	c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.Reverse"))
-		// 	continue
-		// }
-
-		out, err := c.CustomLib.RunEval(value, c.VariableMap)
-		if err != nil {
-			// fixed set string failed bug
-			c.VariableMap[key] = fmt.Sprintf("%v", value)
-			c.CustomLib.UpdateCompileOption(key, decls.String)
-			continue
-		}
-
-		switch value := out.Value().(type) {
-		case *proto.UrlType:
-			c.VariableMap[key] = utils.UrlTypeToString(value)
-			c.CustomLib.UpdateCompileOption(key, decls.NewObjectType("proto.UrlType"))
-		case int64:
-			c.VariableMap[key] = int(value)
+		case int:
+			c.VariableMap[key] = v
 			c.CustomLib.UpdateCompileOption(key, decls.Int)
-		case map[string]string:
-			c.VariableMap[key] = value
-			c.CustomLib.UpdateCompileOption(key, StrStrMapType)
+			continue
+		case int64:
+			c.VariableMap[key] = int(v)
+			c.CustomLib.UpdateCompileOption(key, decls.Int)
+			continue
+		case float64:
+			c.VariableMap[key] = v
+			c.CustomLib.UpdateCompileOption(key, decls.Double)
+			continue
+		case bool:
+			c.VariableMap[key] = v
+			c.CustomLib.UpdateCompileOption(key, decls.Bool)
+			continue
 		default:
-			c.VariableMap[key] = fmt.Sprintf("%v", out)
+			// 其他类型统一按字符串存（保证兼容）
+			c.VariableMap[key] = fmt.Sprintf("%v", v)
 			c.CustomLib.UpdateCompileOption(key, decls.String)
+			continue
 		}
 	}
 }
@@ -441,4 +419,57 @@ func setVariableMap(find string, variableMap map[string]any) string {
 		find = strings.ReplaceAll(find, oldstr, newstr)
 	}
 	return find
+}
+
+func (c *Checker) renderCELPlaceholders(s string) string {
+	// 为空直接返回
+	if len(s) == 0 {
+		return s
+	}
+	re := regexp.MustCompile(`\{\{(.+?)\}\}`)
+	return re.ReplaceAllStringFunc(s, func(m string) string {
+		// 提取 {{ ... }} 内的表达式文本
+		expr := strings.TrimSpace(m[2 : len(m)-2])
+		// 优先走 CEL 求值
+		out, err := c.CustomLib.RunEval(expr, c.VariableMap)
+		if err != nil {
+			// 求值失败，保留原占位符，后续仍可由 setVariableMap 做简单变量替换
+			return m
+		}
+		switch v := out.Value().(type) {
+		case *proto.UrlType:
+			return utils.UrlTypeToString(v)
+		case []byte:
+			return string(v)
+		default:
+			return fmt.Sprintf("%v", v)
+		}
+	})
+}
+
+// 对当前 rule 的请求字段进行预渲染（仅替换能成功求值的表达式）
+func (c *Checker) preRenderRuleRequest(req *poc.RuleRequest) {
+    // HTTP(S)/RAW/NETX 通用字段
+    req.Path = c.renderCELPlaceholders(strings.TrimSpace(req.Path))
+    req.Host = c.renderCELPlaceholders(strings.TrimSpace(req.Host))
+    req.Body = c.renderCELPlaceholders(strings.TrimSpace(req.Body))
+    req.Raw = c.renderCELPlaceholders(strings.TrimSpace(req.Raw))
+    req.Data = c.renderCELPlaceholders(strings.TrimSpace(req.Data))
+
+    // CEL 渲染后做一次简单 {{var}} 替换作为兜底
+    req.Path = setVariableMap(req.Path, c.VariableMap)
+    req.Host = setVariableMap(req.Host, c.VariableMap)
+    req.Body = setVariableMap(req.Body, c.VariableMap)
+    req.Raw = setVariableMap(req.Raw, c.VariableMap)
+    req.Data = setVariableMap(req.Data, c.VariableMap)
+
+    // headers 逐项处理（深拷贝避免并发写入共享 map）
+    if req.Headers != nil {
+        newHeaders := make(map[string]string, len(req.Headers))
+        for hk, hv := range req.Headers {
+            h := c.renderCELPlaceholders(strings.TrimSpace(hv))
+            newHeaders[hk] = setVariableMap(h, c.VariableMap)
+        }
+        req.Headers = newHeaders
+    }
 }

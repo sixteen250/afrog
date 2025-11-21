@@ -16,6 +16,8 @@ var EmbedFileList []string
 
 func init() {
 	EmbedFileList, _ = EmbedFile()
+	// 设置embed poc查找函数
+	poc.SetEmbedPocFinder(EmbedReadContentByName)
 }
 
 func EmbedFile() ([]string, error) {
@@ -50,7 +52,7 @@ func EmbedReadContentByName(name string) ([]byte, error) {
 		if lastSlashIndex != -1 {
 			fname := file[lastSlashIndex+1:]
 			if name == fname || name+".yaml" == fname || name+".yml" == fname {
-				fmt.Println(fname)
+				// fmt.Println(fname)
 				return f.ReadFile(file)
 			}
 		}
@@ -73,4 +75,20 @@ func EmbedReadPocByPath(path string) (poc.Poc, error) {
 		return poc, err
 	}
 	return poc, nil
+}
+
+// 仅解析嵌入 POC 的元数据（不解析 rules）
+func EmbedReadPocMetaByPath(path string) (poc.PocMeta, error) {
+	var pm poc.PocMeta
+
+	file, err := f.Open(path)
+	if err != nil {
+		return pm, err
+	}
+	defer file.Close()
+
+	if err := yaml.NewDecoder(file).Decode(&pm); err != nil {
+		return pm, err
+	}
+	return pm, nil
 }

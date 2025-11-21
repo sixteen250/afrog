@@ -6,19 +6,23 @@
 <h4 align="center">A Security Tool for Bug Bounty, Pentest and Red Teaming</h4>
 
 <p align="center">
+  <a href="README.md">English</a> •
+  <a href="docs/README_CN.md">中文</a>
+</p>
+
+<p align="center">
 <img src="https://img.shields.io/github/go-mod/go-version/zan8in/afrog?filename=go.mod">
 <a href="https://github.com/zan8in/afrog/releases"><img src="https://img.shields.io/github/downloads/zan8in/afrog/total">
 <a href="https://github.com/zan8in/afrog/graphs/contributors"><img src="https://img.shields.io/github/contributors-anon/zan8in/afrog">
 <a href="https://github.com/zan8in/afrog/releases/"><img src="https://img.shields.io/github/release/zan8in/afrog">
 <a href="https://github.com/zan8in/afrog/issues"><img src="https://img.shields.io/github/issues-raw/zan8in/afrog">
-<a href="https://github.com/zan8in/afrog/discussions"><img src="https://img.shields.io/github/discussions/zan8in/afrog">
+<!-- <a href="https://github.com/zan8in/afrog/discussions"><img src="https://img.shields.io/github/discussions/zan8in/afrog"> -->
 </p>
 
 <p align="center" dir="auto">
   <a href="https://github.com/zan8in/afrog/releases">Download</a> •
   <a href="https://github.com/zan8in/afrog/wiki">Wiki</a> •
-  <a href="https://github.com/zan8in/afrog/blob/main/afrog-helper-function.md">Helper Function</a>
-
+  <a href="https://github.com/zan8in/afrog/wiki/Afrog-PoC-规则编写权威指南">Afrog PoC 规则编写权威指南</a>
 </p>
 
 ## PoC Contributors
@@ -479,6 +483,18 @@ $ ./afrog -h
 
 ```sh
 $ go install -v github.com/zan8in/afrog/v3/cmd/afrog@latest
+
+# Confirm Go’s bin path is in your environment
+$ ls ~/go/bin/afrog
+
+# Make it runnable from anywhere (add ~/go/bin to PATH)
+# Permanently (Bash — add to ~/.bashrc):
+$ echo 'export PATH=$PATH:~/go/bin' >> ~/.bashrc
+$ source ~/.bashrc
+
+# If you use Zsh:
+$ echo 'export PATH=$PATH:~/go/bin' >> ~/.zshrc
+$ source ~/.zshrc
 ```
 
 ## Running afrog
@@ -626,29 +642,19 @@ afrog -t https://example.com -ja result.json
 
 ### Simple Example
 
-Scan the website `http://example.com`
+For comprehensive SDK documentation:
 
-```golang
-package main
+- [SDK Usage Guide (English)](docs/SDK_Usage_Guide_English.md)
+- [SDK使用指南 (中文)](docs/SDK使用指南_中文.md)
 
-import (
-	"fmt"
-
-	"github.com/zan8in/afrog"
-)
-
-func main() {
-	if err := afrog.NewScanner([]string{"http://example.com"}, afrog.Scanner{}); err != nil {
-		fmt.Println(err.Error())
-	}
-}
-
-```
-
-More examples:
+### More Examples & Documentation
 
 - [Basic scanner](examples/basic_scan/main.go)
-- [Read URL batch scan from file](examples/batch_scan/main.go)
+- [Async scanner](examples/async_scan/main.go)  
+- [OOB scanner](examples/oob_scan/main.go)
+- [Progress scanner](examples/progress_scan/main.go)
+
+
 
 ## Discussion group
 

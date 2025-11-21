@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/zan8in/afrog/v3/pkg/utils"
+	// 移除对pocs包的导入
 	"gopkg.in/yaml.v2"
 )
 
@@ -138,6 +139,9 @@ var LocalPocDirectory string
 func init() {
 	LocalPocDirectory, _ = InitPocHomeDirectory()
 	LocalFileList, _ = LocalWalkFiles(LocalPocDirectory)
+
+	// 确保在启动时创建用户目录下的 afrog-curated-pocs 和 afrog-my-pocs
+	EnsureCuratedAndMyPocDirectories()
 }
 
 func InitLocalAppendList(pathFolder []string) {
@@ -328,21 +332,121 @@ func (poc *Poc) IsHTTPType() bool {
 }
 
 func (poc *Poc) IsReverse() bool {
-	if len(poc.Set) == 0 {
-		return false
-	}
+    // ... existing code ...
+    for _, set := range poc.Set {
+        k := set.Key.(string)
+        vStr, ok := set.Value.(string)
+        if !ok {
+            // 值不是字符串时无需参与反连判断，直接跳过
+            continue
+        }
+        if strings.Contains(k, "reverse") || strings.Contains(vStr, "reverse.url") {
+            return true
+        }
+    }
 
-	for _, set := range poc.Set {
-		k, v := set.Key.(string), set.Value.(string)
-		if strings.Contains(k, "reverse") || strings.Contains(v, "reverse.url") {
-			return true
-		}
-	}
-
-	return false
+    return false
 }
 
 type Extractors struct {
 	Type      string        `yaml:"type"`      // regex,str
 	Extractor yaml.MapSlice `yaml:"extractor"` //
+}
+
+// FindPocYamlById 通过POC ID查找原始YAML内容
+// 优先从embed POC中查找，然后从local POC中查找
+// 添加函数类型定义用于回调
+type EmbedPocFinderFunc func(pocId string) ([]byte, error)
+
+// 全局变量存储embed poc查找函数
+var embedPocFinder EmbedPocFinderFunc
+
+// 设置embed poc查找函数
+func SetEmbedPocFinder(finder EmbedPocFinderFunc) {
+	embedPocFinder = finder
+}
+
+func FindPocYamlById(pocId string) ([]byte, error) {
+	// 首先尝试从embed POC中查找
+	if embedPocFinder != nil {
+		if content, err := embedPocFinder(pocId); err == nil {
+			return content, nil
+		}
+	}
+
+	// 然后尝试从本地POC中查找
+	return findLocalPocById(pocId)
+}
+
+func findLocalPocById(pocId string) ([]byte, error) {
+	// 搜索LocalFileList
+	for _, filePath := range LocalFileList {
+		if poc, err := LocalReadPocByPath(filePath); err == nil {
+			if poc.Id == pocId {
+				return os.ReadFile(filePath)
+			}
+		}
+	}
+
+	// 搜索LocalAppendList
+	for _, filePath := range LocalAppendList {
+		if poc, err := LocalReadPocByPath(filePath); err == nil {
+			if poc.Id == pocId {
+				return os.ReadFile(filePath)
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("local poc with id '%s' not found", pocId)
+}
+
+// getFileNameFromPath 从文件路径中提取文件名
+func getFileNameFromPath(filePath string) string {
+	lastSlashIndex := strings.LastIndex(filePath, "/")
+	if lastSlashIndex != -1 {
+		return filePath[lastSlashIndex+1:]
+	}
+	return filePath
+}
+
+// EnsureCuratedAndMyPocDirectories
+// 启动时确保在用户家目录下创建 afrog-curated-pocs 和 afrog-my-pocs 两个目录（若不存在则创建）
+func EnsureCuratedAndMyPocDirectories() {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	dirs := []string{
+		filepath.Join(homeDir, "afrog-curated-pocs"),
+		filepath.Join(homeDir, "afrog-my-pocs"),
+	}
+
+	for _, dir := range dirs {
+		if _, err := os.Stat(dir); err != nil {
+			_ = os.MkdirAll(dir, 0755)
+		}
+	}
+}
+
+// 仅解析 POC 元数据，避免解析 rules 触发 RuleMapSlice 的 Unmarshal
+type PocMeta struct {
+	Id   string `yaml:"id"`
+	Info Info   `yaml:"info"`
+}
+
+// 从本地路径读取 POC 元数据（不解析 rules）
+func LocalReadPocMetaByPath(pocYaml string) (PocMeta, error) {
+	var pm PocMeta
+
+	file, err := os.Open(pocYaml)
+	if err != nil {
+		return pm, err
+	}
+	defer file.Close()
+
+	if err := yaml.NewDecoder(file).Decode(&pm); err != nil {
+		return pm, err
+	}
+	return pm, nil
 }
